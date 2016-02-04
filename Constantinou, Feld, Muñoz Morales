@@ -1,0 +1,209 @@
+// Put your computet's adress here
+global dir "C:\Users\Juan\Dropbox\1. Phd Illinois\3. Second Year\Spring\1. Applied Microeconometrics"
+
+// Directory and data files
+cd "$dir\Applied Micro PS\1. PS1"
+global data "$dir\Applied Micro PS\1. PS1"
+clear all 
+// Question 1: 
+	set obs 100
+	set seed 1234
+// Gen Vars
+	gen eta_c = rnormal(0,1)
+	gen D_star_c = rnormal(0,1)
+	gen D_c = (D_star_c>0)
+// Gen Clusters	
+	gen clusterid = _n 
+	expand 100
+// Gen Pop vars
+	gen epsi_ic = rnormal(0,1)
+	gen y_ic = D_c + eta_c + (D_c * eta_c) + epsi_ic
+
+// ANSWERS:	
+// a)
+	reg y_ic D_c
+	mat b = e(V)
+	scalar se_a = (b[1,1])^(0.5)
+// b)  
+	reg y_ic D_c, robust
+	mat b = e(V)
+	scalar se_b = (b[1,1])^(0.5)
+// c) 
+	reg y_ic D_c, cluster(clusterid)
+	mat b = e(V)
+	scalar se_c = (b[1,1])^(0.5)
+// d)
+	mat se = se_a, se_b, se_c
+	mat coln se = "Normal" "Robust" "Cluster"
+	outtable using "point1a", mat(se) replace f(%5.3g) nobox cap("Standard Errors") clabel(tb:se) label
+// e) 
+	collapse eta_c D_star_c D_c epsi_ic y_ic, by(clusterid) 
+	// SE
+	reg y_ic D_c	
+	mat b = e(V)
+	scalar se_e1 = (b[1,1])^(0.5)
+	// SE Robust
+	reg y_ic D_c, robust
+	mat b = e(V)
+	scalar se_e2 = (b[1,1])^(0.5)
+	// HC2
+	reg y_ic D_c, vce(hc2)
+	mat b = e(V)
+	scalar se_e3 = (b[1,1])^(0.5)
+	// HC3 	
+	reg y_ic D_c, vce(hc3)
+	mat b = e(V)
+	scalar se_e4 = (b[1,1])^(0.5)
+	mat se_2 = se_e1, se_e2, se_e3, se_e4
+	mat coln se_2 = "Normal" "Robust" "hc2" "hc3"
+	outtable using "point1e", mat(se_2) replace f(%5.3g) nobox cap("Collapsed Standard Errors") clabel(tb:se2) label	
+// f) Repeat the code using the r class program 
+	do simulation.do
+// g)
+	gen one = 1
+	table one, c(mean Naive mean Clustered mean Naive_collapsed mean Robust_collapsed mean Hc2) replace name(t)
+	drop one
+	mkmat t1 t2 t3 t4 t5, mat(point1g) 
+	mat coln point1g = "Naive" "Clustered" "Naive_collapsed" "Robust_collapsed" "Hc2"
+	outtable using "point1g", mat(point1g) replace f(%5.3g) nobox cap("Fraction of Rejections by Error Type") clabel(tb:se3) label	
+	
+// QUESTION 2
+// Load Data
+use "$data\PSET1-2016.dta", clear
+// a) 
+	// Describe the data
+		tabstat persons vote00 vote98 newreg age female vote02 contact treat_real, s(mean sd min max N) save
+		mat A = r(StatTotal)'
+		outtable using "point2a", mat(A) replace f(%5.3g %5.3g %5.3g %5.3g %9.0g) nobox cap("Descriptive Statistics") clabel(tb:ds) 	
+	// New database 
+		tempvar hold 
+		cap erase "results.dta"
+		postfile `hold' str20(variable) mean sd min max N T p_value using "results.dta"
+		foreach var in persons vote00 vote98 newreg age female vote02 contact   { 
+			local variable = "`var'"
+			forvalues j = 0/1 {
+				qui sum `var' if treat_real==`j'
+				local mean = r(mean)
+				local sd = r(sd)
+				local min = r(min)
+				local max = r(max)
+				local N = r(N)
+				qui sum treat_real if treat_real==`j'
+				local T = r(mean) 
+				qui ttest `var', by(treat_real)
+				local t = abs(r(t))
+				local p_value = 2*ttail(r(df_t), `t')
+			post `hold' ("`variable'") (`mean') (`sd') (`min') (`max') (`N') (`T') (`p_value')
+			}
+		}
+		postclose `hold'
+		use "results.dta", clear
+	// Create and export graph. 
+		encode variable, gen(var) 
+		reshape wide mean sd min max N  p_value, i(var) j(T)
+		rename mean1 T 
+		rename mean0 C 
+		gen N = N0 + N1
+		do balgraph.do
+		balgraph p_value1, order(var) mar(1.7) vart(variable) title(Balance) treat(T) con(C) obs(N) subt("T-test P-value") 
+		graph export "Balance.png", replace
+	// Test joint F
+	use "$data\PSET1-2016.dta", clear
+		reg treat_real persons newreg age female vote98 vote00
+		local F = e(F)
+		local p = Ftail(e(df_m),e(df_r),e(F))	
+		mat F = `F' \ `p'
+		mat rown F = F-test P-value
+		outtable using "point2aa", mat(F) replace f(%5.3g) nobox cap("F-test") clabel(tb:point2a) 	
+// b)
+	// i) Reduced form 
+		reg vote02 treat_real, r
+		scalar reduced= _b[treat_real]
+		outreg2 using point2bi, tex bra dec(3) replace 
+		// ii) First Stage
+		reg contact treat_real 
+		local F = round(e(F),0.001)
+		outreg2 using point2bii, tex bra dec(3) replace addtext("F-first Stage", `F')
+		scalar first = _b[treat_real]
+		mat wald = reduced/first
+	// ii) 2SLS
+		// 2SLS
+		ivreg2 vote02 vote00 vote98 newreg age female persons (contact=treat_real),robust
+		outreg2 using point2biii, tex bra dec(3) replace cttop("2SLS")
+		// Control function
+		reg contact treat_real vote00 vote98 newreg age female persons, robust
+		predict cont_hat if e(sample)
+		gen resid=contact-cont_hat
+		reg vote02 contact vote00 vote98 newreg age female persons resid, robust
+		outreg2 using point2biii, tex bra dec(3) append cttop("Control Function") 
+// c) 
+		reg vote02 contact
+		outreg2 using point2c, tex bra dec(3) replace cttop("No controls")
+		reg vote02 contact vote00 vote98 newreg age female persons
+		outreg2 using point2c, tex bra dec(3) append cttop("Controls")
+		xi: reg vote02 i.contact*i.vote00 i.contact*i.vote98 i.contact*i.newreg i.contact*age i.contact*i.female i.contact*persons
+		outreg2 using point2c, tex bra dec(3) append cttop("Interactions") sortvar(contact vote00 vote98 newreg age female persons)
+// d)
+	// i)
+		probit contact vote00 vote98 newreg age female persons
+		predict pred_contact if e(sample)
+	// ii)
+		# delimit ; 
+		twoway (kdensity pred_contact) 
+		(kdensity pred_contact, bwidth (0.05) lp(dash)) 
+		(kdensity pred_contact, triangle), 
+		ytitle(Density) xtitle(Propensity Score) title("Kernel Comparisons") 
+		legend(order(1 2 3) rows(1) 
+		label(1 "Optimal Bandwith") label(2 "Bandwith 0.05") label (3 "Triangle Kernel"))  
+		graphr(c(white)) ;
+		# delimit cr
+		graph export Kernel_comparison.png, replace
+	// iii ) 
+		reg vote02 contact [pw = pred_contact]
+		outreg2 using point2diii, tex bra dec(3) replace 
+	// iv ) 
+		cap gen lambda = contact + (1 - contact)*(pred_contact/(1-pred_contact))
+		reg vote02 contact [pw = lambda] 
+		outreg2 using point2div, tex bra dec(3) replace cttop("Weighting with $\lambda$")
+	// v)
+		
+	// vi)
+		// Closest neighbor
+			use "$data\PSET1-2016.dta", clear
+			probit contact vote00 vote98 newreg age female persons
+			predict pred_contact if e(sample)
+			set seed 1234
+			gen order = uniform()
+			sort order
+			psmatch2 contact persons vote00 vote98 newreg age female, outcome(vote02) n(1) ate
+			local nn_att = r(att)
+			local nn_ate = r(ate)
+		// Stratification
+			cap gen att = .
+			cap gen ate = .
+			cap egen g = group(female)
+			levels g, local(gr)
+			qui foreach j of local gr {
+					psmatch2 contact persons vote00 vote98 newreg age female if g==`j', out(vote02) ate
+					replace att = r(att) if  g==`j'
+					replace ate = r(ate) if  g==`j'
+			}
+			sum att
+			local strata_att = r(mean)
+			sum ate
+			local strata_ate = r(mean)
+		// Radius
+			psmatch2 contact persons vote00 vote98 newreg age female, outcome(vote02) radius ate
+			local radius_att = r(att)
+			local radius_ate = r(ate)
+		// Kernel
+			psmatch2 contact persons vote00 vote98 newreg age female, outcome(vote02) kernel ate
+			local kernel_att = r(att)
+			local kernel_ate = r(ate)
+		// Matrix
+			mat att = `nn_att' \ `strata_att' \ `radius_att' \ `kernel_att'
+			mat ate = `nn_ate' \ `strata_ate' \ `radius_ate' \ `kernel_ate'
+			mat G = att,ate
+			mat rown G = "Nearest_Neighbor" "Strata" "Radius" "Kernel"
+			mat coln G = "ATT" "ATE"
+			outtable using "point2dvi", mat(G) replace f(%5.3g) nobox cap("Propensity ATT and ATE") clabel(tb:psm) 
